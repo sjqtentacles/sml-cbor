@@ -1,5 +1,7 @@
 # sml-cbor
 
+[![CI](https://github.com/sjqtentacles/sml-cbor/actions/workflows/ci.yml/badge.svg)](https://github.com/sjqtentacles/sml-cbor/actions/workflows/ci.yml)
+
 CBOR (Concise Binary Object Representation) encoder/decoder in pure Standard ML (RFC 8949)
 
 ## Installation
