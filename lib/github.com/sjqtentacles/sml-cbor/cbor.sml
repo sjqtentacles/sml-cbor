@@ -161,6 +161,54 @@ struct
         byteStr (IntInf.fromInt 0xfb) ^ encodeFloat64 rv
 
   (* ------------------------------------------------------------------ *)
+  (* Canonical (RFC 8949 Section 4.2.1) encoder                           *)
+  (* ------------------------------------------------------------------ *)
+
+  (* Stable merge sort by an order comparator; deterministic and identical
+     on both compilers (avoids relying on ListMergeSort). *)
+  fun sortBy (cmp : 'a * 'a -> order) (xs : 'a list) : 'a list =
+    let
+      fun merge ([], ys) = ys
+        | merge (xs, []) = xs
+        | merge (x :: xs', y :: ys') =
+            (case cmp (x, y) of
+               GREATER => y :: merge (x :: xs', ys')
+             | _       => x :: merge (xs', y :: ys'))
+      fun split [] = ([], [])
+        | split [z] = ([z], [])
+        | split (z :: w :: rest) =
+            let val (a, b) = split rest in (z :: a, w :: b) end
+      fun ms [] = []
+        | ms [x] = [x]
+        | ms xs = let val (a, b) = split xs in merge (ms a, ms b) end
+    in ms xs end
+
+  (* Encode deterministically. Integers/lengths use the shortest form
+     (reusing encode/encodeHead), all lengths are definite, and map entries
+     are emitted with keys sorted by the bytewise lexicographic order of
+     their canonical-encoded key bytes (String.compare is exactly this:
+     byte-by-byte, with a shorter prefix sorting first). *)
+  fun encodeCanonical (item : t) : string =
+    case item of
+      Array elems =>
+        encodeHead 4 (IntInf.fromInt (List.length elems)) ^
+        String.concat (List.map encodeCanonical elems)
+    | Map pairs =>
+        let
+          val entries = List.map (fn (k, v) => (encodeCanonical k, v)) pairs
+          val sorted  = sortBy (fn ((ka, _), (kb, _)) => String.compare (ka, kb)) entries
+        in
+          encodeHead 5 (IntInf.fromInt (List.length pairs)) ^
+          String.concat (List.map (fn (kb, v) => kb ^ encodeCanonical v) sorted)
+        end
+    | Tag (tagNum, child) =>
+        encodeHead 6 tagNum ^ encodeCanonical child
+    | other =>
+        (* Uint, Nint, Bytes, Text, Simple, Float: encode already emits the
+           shortest, definite-length form. *)
+        encode other
+
+  (* ------------------------------------------------------------------ *)
   (* Decoder                                                              *)
   (* ------------------------------------------------------------------ *)
 

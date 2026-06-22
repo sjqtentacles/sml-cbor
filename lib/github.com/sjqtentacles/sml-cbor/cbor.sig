@@ -13,5 +13,12 @@ sig
     | Float  of real
 
   val encode : t -> string
+
+  (* Encode using RFC 8949 Section 4.2.1 Core Deterministic Encoding:
+     shortest-form integers/lengths, definite-length items only, and map
+     keys sorted in bytewise lexicographic order of their canonical-encoded
+     key bytes. Recurses into nested arrays and maps. *)
+  val encodeCanonical : t -> string
+
   val decode : string -> t
 end

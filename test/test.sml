@@ -39,6 +39,16 @@ struct
   fun b (n : int) : string = String.str (Char.chr n)
   fun bs (ns : int list) : string = String.concat (List.map b ns)
 
+  (* Render a byte string as uppercase hex (no separators) for assertions *)
+  fun toHex (s : string) : string =
+    String.concat
+      (List.map
+        (fn c =>
+          let val n = Char.ord c
+              fun hx d = if d < 10 then Char.chr (d + 48) else Char.chr (d + 55)
+          in String.implode [hx (n div 16), hx (n mod 16)] end)
+        (String.explode s))
+
   fun run () =
     let
       val () = Harness.reset ()
@@ -217,6 +227,88 @@ struct
       val () = checkEncode "Uint 4294967295"
                  (Cbor.Uint (IntInf.* (IntInf.fromInt 65536, IntInf.fromInt 65536) - IntInf.fromInt 1))
                  (bs [0x1a, 0xff, 0xff, 0xff, 0xff])
+
+      (* ---------------------------------------------------------------- *)
+      (* Section 11: Canonical encoding (RFC 8949 Section 4.2.1)          *)
+      (* ---------------------------------------------------------------- *)
+      val () = Harness.section "Canonical encoding"
+
+      val u  = Cbor.Uint o IntInf.fromInt
+
+      (* Map {1:2, 3:4} -> A2 01 02 03 04 (already sorted) *)
+      val () = Harness.checkString "Canonical map {1:2,3:4}"
+                 ( "A201020304"
+                 , toHex (Cbor.encodeCanonical
+                     (Cbor.Map [ (u 1, u 2), (u 3, u 4) ])) )
+
+      (* RFC 7049 Section 3.9 canonical key ordering. Keys 10, 100, -1,
+         "z", "aa" have canonical key encodings 0x0a, 0x18 0x64, 0x20,
+         0x61 0x7a, 0x62 0x61 0x61 and must sort in that order regardless
+         of insertion order. Built here in a SCRAMBLED order. *)
+      val scrambled =
+        Cbor.Map
+          [ (Cbor.Text "aa",        u 5)
+          , (u 100,                 u 2)
+          , (Cbor.Text "z",         u 4)
+          , (u 10,                  u 1)
+          , (Cbor.Nint (IntInf.fromInt 0), u 3) ]
+      (* sorted: A5 0A 01 18 64 02 20 03 61 7A 04 62 61 61 05 *)
+      val () = Harness.checkString "Canonical RFC 7049 3.9 key ordering"
+                 ( "A50A011864022003617A0462616105"
+                 , toHex (Cbor.encodeCanonical scrambled) )
+
+      (* Sorted output must also pass through encodeCanonical unchanged
+         (idempotence over already-canonical input). *)
+      val () = Harness.checkString "Canonical idempotent on sorted map"
+                 ( toHex (Cbor.encodeCanonical scrambled)
+                 , toHex (Cbor.encodeCanonical (Cbor.decode (Cbor.encodeCanonical scrambled))) )
+
+      (* Superset: with no maps present, encodeCanonical = encode. *)
+      fun agree name item =
+        Harness.check name (Cbor.encodeCanonical item = Cbor.encode item)
+
+      val () = agree "Canonical = encode: Uint 1000" (u 1000)
+      val () = agree "Canonical = encode: Nint 9"    (Cbor.Nint (IntInf.fromInt 9))
+      val () = agree "Canonical = encode: Text"      (Cbor.Text "IETF")
+      val () = agree "Canonical = encode: Bytes"     (Cbor.Bytes (bs [0x01, 0x02, 0x03]))
+      val () = agree "Canonical = encode: Array"
+                 (Cbor.Array [u 1, u 2, u 3])
+      val () = agree "Canonical = encode: Simple"    (Cbor.Simple 22)
+
+      (* Round-trip through decode (compare via the canonical encoding so
+         map key ordering is well-defined). *)
+      fun rtCanon name item =
+        Harness.check name
+          (Cbor.encodeCanonical (Cbor.decode (Cbor.encodeCanonical item))
+             = Cbor.encodeCanonical item)
+
+      val () = rtCanon "RT canonical: Uint 1000" (u 1000)
+      val () = rtCanon "RT canonical: Array"     (Cbor.Array [u 1, u 2, u 3])
+      val () = rtCanon "RT canonical: scrambled map" scrambled
+      val () = rtCanon "RT canonical: nested map"
+                 (Cbor.Map
+                   [ (Cbor.Text "b", Cbor.Array [u 1, u 2])
+                   , (Cbor.Text "a",
+                      Cbor.Map [ (u 2, Cbor.Text "y")
+                               , (u 1, Cbor.Text "x") ]) ])
+
+      (* For an already-sorted structure, decode reconstructs it exactly,
+         so the plain encode of the decoded value matches the original. *)
+      val sortedNested =
+        Cbor.Map
+          [ (u 1, Cbor.Array [u 7, u 8])
+          , (u 2, Cbor.Map [ (Cbor.Text "a", u 1) ]) ]
+      val () = Harness.check "RT canonical decode equals original (sorted)"
+                 (Cbor.encode (Cbor.decode (Cbor.encodeCanonical sortedNested))
+                    = Cbor.encode sortedNested)
+
+      (* Nested maps inside arrays are canonicalized too: the inner map's
+         keys are reordered even when it is wrapped in an array.
+         Array [ Map {3:4, 1:2} ] -> 81 A2 01 02 03 04 *)
+      val () = Harness.checkString "Canonical nested map in array"
+                 ( "81A201020304"
+                 , toHex (Cbor.encodeCanonical
+                     (Cbor.Array [ Cbor.Map [ (u 3, u 4), (u 1, u 2) ] ])) )
 
     in
       Harness.run ()
